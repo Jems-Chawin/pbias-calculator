@@ -1,7 +1,6 @@
 from flask import Flask, request, render_template_string, jsonify
 from flask_cors import CORS
-import pandas as pd
-import numpy as np
+import csv
 import os
 from werkzeug.utils import secure_filename
 import tempfile
@@ -10,10 +9,10 @@ app = Flask(__name__)
 CORS(app)
 
 # Configuration
-app.config['MAX_CONTENT_LENGTH'] = 300 * 1024 * 1024  # 300MB max file size
+app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16MB max file size
 ALLOWED_EXTENSIONS = {'csv'}
 
-# HTML template for the frontend
+# HTML template (same as before)
 HTML_TEMPLATE = '''
 <!DOCTYPE html>
 <html>
@@ -36,6 +35,12 @@ HTML_TEMPLATE = '''
         h1 {
             color: #333;
             text-align: center;
+        }
+        .note {
+            text-align: center;
+            color: #666;
+            font-size: 14px;
+            margin-bottom: 20px;
         }
         .upload-section {
             margin: 20px 0;
@@ -112,6 +117,7 @@ HTML_TEMPLATE = '''
 <body>
     <div class="container">
         <h1>PBIAS Score Calculator</h1>
+        <p class="note">Note: This lightweight version works with CSV files efficiently</p>
         
         <form id="uploadForm">
             <div class="upload-section">
@@ -152,7 +158,6 @@ HTML_TEMPLATE = '''
             formData.append('submission', submissionFile);
             formData.append('groundtruth', groundtruthFile);
             
-            // Show loading, hide results
             document.querySelector('.loading').style.display = 'block';
             document.getElementById('result').style.display = 'none';
             document.getElementById('error').style.display = 'none';
@@ -184,9 +189,9 @@ HTML_TEMPLATE = '''
             resultDiv.innerHTML = `
                 <h2>Results</h2>
                 <p><strong>PBIAS Score:</strong> ${data.pbias_score.toFixed(4)}%</p>
-                <p><strong>Submission shape:</strong> ${data.submission_shape[0]} rows × ${data.submission_shape[1]} columns</p>
-                <p><strong>Ground truth shape:</strong> ${data.groundtruth_shape[0]} rows × ${data.groundtruth_shape[1]} columns</p>
-                <p><strong>Data columns used:</strong> Columns ${data.start_column} to ${data.end_column}</p>
+                <p><strong>Submission rows:</strong> ${data.submission_rows}</p>
+                <p><strong>Ground truth rows:</strong> ${data.groundtruth_rows}</p>
+                <p><strong>Columns processed:</strong> ${data.columns_processed}</p>
             `;
             resultDiv.style.display = 'block';
         }
@@ -204,101 +209,97 @@ HTML_TEMPLATE = '''
 def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
-def pbias_abs(df_observe, df_predict):
-    """Calculate absolute percent bias between observed and predicted dataframes"""
-    diff_abs = (df_predict - df_observe).abs().values.flatten()
-    obs_vals = df_observe.values.flatten()
+def calculate_pbias_from_csv(submission_path, groundtruth_path):
+    """Calculate PBIAS without loading entire dataset into memory"""
+    sum_diff_abs = 0.0
+    sum_obs = 0.0
+    rows_processed = 0
+    columns_processed = 0
     
-    # Avoid division by zero
-    if obs_vals.sum() == 0:
-        return np.nan
+    with open(submission_path, 'r') as sub_file, open(groundtruth_path, 'r') as gt_file:
+        sub_reader = csv.reader(sub_file)
+        gt_reader = csv.reader(gt_file)
+        
+        # Skip headers if any
+        sub_header = next(sub_reader, None)
+        gt_header = next(gt_reader, None)
+        
+        # Process row by row
+        for sub_row, gt_row in zip(sub_reader, gt_reader):
+            if len(sub_row) != len(gt_row):
+                raise ValueError(f"Row {rows_processed + 1}: Column count mismatch")
+            
+            # Process columns from index 5 onwards
+            if len(sub_row) > 5:
+                columns_processed = len(sub_row) - 5
+                for i in range(5, len(sub_row)):
+                    try:
+                        sub_val = float(sub_row[i])
+                        gt_val = float(gt_row[i])
+                        sum_diff_abs += abs(sub_val - gt_val)
+                        sum_obs += abs(gt_val)
+                    except (ValueError, IndexError):
+                        continue
+            
+            rows_processed += 1
     
-    pbias = 100 * (diff_abs.sum() / obs_vals.sum())
-    return pbias
+    if sum_obs == 0:
+        return 0.0, rows_processed, columns_processed
+    
+    pbias = 100 * (sum_diff_abs / sum_obs)
+    return pbias, rows_processed, columns_processed
 
 @app.route('/')
 def index():
-    """Render the main page"""
     return render_template_string(HTML_TEMPLATE)
 
 @app.route('/calculate_pbias', methods=['POST'])
 def calculate_pbias():
-    """API endpoint to calculate PBIAS score"""
     try:
-        # Check if files are present
         if 'submission' not in request.files or 'groundtruth' not in request.files:
             return jsonify({'error': 'Both CSV files are required'}), 400
         
         submission_file = request.files['submission']
         groundtruth_file = request.files['groundtruth']
         
-        # Validate file names
         if submission_file.filename == '' or groundtruth_file.filename == '':
             return jsonify({'error': 'No files selected'}), 400
         
-        # Validate file extensions
         if not (allowed_file(submission_file.filename) and allowed_file(groundtruth_file.filename)):
             return jsonify({'error': 'Only CSV files are allowed'}), 400
         
         # Save temporary files
-        with tempfile.NamedTemporaryFile(delete=False, suffix='.csv') as tmp_submission:
+        with tempfile.NamedTemporaryFile(delete=False, suffix='.csv', mode='w') as tmp_submission:
             submission_file.save(tmp_submission.name)
             submission_path = tmp_submission.name
         
-        with tempfile.NamedTemporaryFile(delete=False, suffix='.csv') as tmp_groundtruth:
+        with tempfile.NamedTemporaryFile(delete=False, suffix='.csv', mode='w') as tmp_groundtruth:
             groundtruth_file.save(tmp_groundtruth.name)
             groundtruth_path = tmp_groundtruth.name
         
         try:
-            # Read CSV files
-            uploaded_data = pd.read_csv(submission_path)
-            groundtruth_data = pd.read_csv(groundtruth_path)
+            # Calculate PBIAS
+            pbias_score, rows, cols = calculate_pbias_from_csv(submission_path, groundtruth_path)
             
-            # Validate data shapes
-            if uploaded_data.shape != groundtruth_data.shape:
-                return jsonify({
-                    'error': f'Data shape mismatch. Submission: {uploaded_data.shape}, Ground truth: {groundtruth_data.shape}'
-                }), 400
-            
-            # Check if there are enough columns (at least 6 for the original logic)
-            if uploaded_data.shape[1] < 6:
-                return jsonify({
-                    'error': f'Not enough columns. Expected at least 6 columns, got {uploaded_data.shape[1]}'
-                }), 400
-            
-            # Calculate PBIAS using columns from index 5 onwards (as in original code)
-            pbias_score = pbias_abs(groundtruth_data.iloc[:, 5:], uploaded_data.iloc[:, 5:])
-            
-            # Prepare response
             response = {
                 'pbias_score': float(pbias_score),
-                'submission_shape': list(uploaded_data.shape),
-                'groundtruth_shape': list(groundtruth_data.shape),
-                'start_column': 6,  # Column 6 in 1-based indexing (5 in 0-based)
-                'end_column': uploaded_data.shape[1]
+                'submission_rows': rows,
+                'groundtruth_rows': rows,
+                'columns_processed': cols
             }
             
             return jsonify(response), 200
             
         finally:
-            # Clean up temporary files
             os.unlink(submission_path)
             os.unlink(groundtruth_path)
             
-    except pd.errors.EmptyDataError:
-        return jsonify({'error': 'One or both CSV files are empty'}), 400
-    except pd.errors.ParserError:
-        return jsonify({'error': 'Error parsing CSV files. Please check the file format'}), 400
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
     except Exception as e:
         return jsonify({'error': f'An unexpected error occurred: {str(e)}'}), 500
 
-@app.route('/api/calculate_pbias', methods=['POST'])
-def api_calculate_pbias():
-    """Pure API endpoint (returns JSON only, no HTML)"""
-    return calculate_pbias()
-
 if __name__ == '__main__':
-    # Run the Flask app
     import os
     port = int(os.environ.get('PORT', 5000))
     app.run(debug=False, host='0.0.0.0', port=port)
