@@ -4,9 +4,14 @@ import csv
 import os
 from werkzeug.utils import secure_filename
 import tempfile
+import logging
 
 app = Flask(__name__)
 CORS(app)
+
+# Set up logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 # Configuration
 app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16MB max file size
@@ -256,11 +261,16 @@ def index():
 @app.route('/calculate_pbias', methods=['POST'])
 def calculate_pbias():
     try:
+        logger.info("Received PBIAS calculation request")
+        
         if 'submission' not in request.files or 'groundtruth' not in request.files:
+            logger.error("Missing files in request")
             return jsonify({'error': 'Both CSV files are required'}), 400
         
         submission_file = request.files['submission']
         groundtruth_file = request.files['groundtruth']
+        
+        logger.info(f"Files received: {submission_file.filename}, {groundtruth_file.filename}")
         
         if submission_file.filename == '' or groundtruth_file.filename == '':
             return jsonify({'error': 'No files selected'}), 400
@@ -269,17 +279,25 @@ def calculate_pbias():
             return jsonify({'error': 'Only CSV files are allowed'}), 400
         
         # Save temporary files
-        with tempfile.NamedTemporaryFile(delete=False, suffix='.csv', mode='w') as tmp_submission:
-            submission_file.save(tmp_submission.name)
-            submission_path = tmp_submission.name
-        
-        with tempfile.NamedTemporaryFile(delete=False, suffix='.csv', mode='w') as tmp_groundtruth:
-            groundtruth_file.save(tmp_groundtruth.name)
-            groundtruth_path = tmp_groundtruth.name
+        try:
+            with tempfile.NamedTemporaryFile(delete=False, suffix='.csv') as tmp_submission:
+                submission_file.save(tmp_submission.name)
+                submission_path = tmp_submission.name
+                logger.info(f"Saved submission to: {submission_path}")
+            
+            with tempfile.NamedTemporaryFile(delete=False, suffix='.csv') as tmp_groundtruth:
+                groundtruth_file.save(tmp_groundtruth.name)
+                groundtruth_path = tmp_groundtruth.name
+                logger.info(f"Saved groundtruth to: {groundtruth_path}")
+        except Exception as e:
+            logger.error(f"Error saving files: {str(e)}")
+            return jsonify({'error': f'Error saving files: {str(e)}'}), 500
         
         try:
             # Calculate PBIAS
+            logger.info("Starting PBIAS calculation")
             pbias_score, rows, cols = calculate_pbias_from_csv(submission_path, groundtruth_path)
+            logger.info(f"PBIAS calculated: {pbias_score}, rows: {rows}, cols: {cols}")
             
             response = {
                 'pbias_score': float(pbias_score),
@@ -290,13 +308,22 @@ def calculate_pbias():
             
             return jsonify(response), 200
             
+        except Exception as calc_error:
+            logger.error(f"Error in PBIAS calculation: {str(calc_error)}")
+            raise
         finally:
-            os.unlink(submission_path)
-            os.unlink(groundtruth_path)
+            try:
+                os.unlink(submission_path)
+                os.unlink(groundtruth_path)
+                logger.info("Cleaned up temporary files")
+            except Exception as e:
+                logger.error(f"Error cleaning up files: {str(e)}")
             
     except ValueError as e:
+        logger.error(f"ValueError: {str(e)}")
         return jsonify({'error': str(e)}), 400
     except Exception as e:
+        logger.error(f"Unexpected error: {str(e)}", exc_info=True)
         return jsonify({'error': f'An unexpected error occurred: {str(e)}'}), 500
 
 if __name__ == '__main__':
