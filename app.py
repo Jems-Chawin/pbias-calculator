@@ -1,4 +1,4 @@
-from flask import Flask, request, render_template_string, jsonify
+from flask import Flask, request, render_template_string, jsonify, send_from_directory
 from flask_cors import CORS
 import pandas as pd
 import numpy as np
@@ -176,9 +176,15 @@ HTML_TEMPLATE = '''
 </head>
 <body>
     <div class="container">
-        <h1>PBIAS Score Calculator</h1>
+        <div style="text-align: center; margin-bottom: 25px;">
+            <img src="/static/exp_logo.png" 
+                 alt="House EXP Logo" 
+                 style="max-width: 200px; height: auto;">
+        </div>
+        
+        <h1>House EXP PBIAS Score Calculator</h1>
         <div class="info">
-            <strong>Professional Calculator Service</strong><br>
+            <strong>💙Property of House EXP: Calculator Service💙</strong><br>
             Maximum file size: 200MB per CSV<br>
             <small>Permanent URL: Save this link for future use!</small>
         </div>
@@ -357,6 +363,9 @@ HTML_TEMPLATE = '''
             
             // Check if this is a perfect match (likely testing with identical files)
             const isPerfectMatch = data.pbias_score === 0 && data.position_stats.mismatches === 0;
+
+            // Check if we have the new stats format
+            const hasNewStats = data.position_stats.both_zero !== undefined;
             
             // Create status message based on results
             let statusMessage = '';
@@ -419,8 +428,32 @@ HTML_TEMPLATE = '''
                 <p><strong>Submission shape:</strong> ${data.submission_shape[0]} rows × ${data.submission_shape[1]} columns</p>
                 <p><strong>Ground truth shape:</strong> ${data.groundtruth_shape[0]} rows × ${data.groundtruth_shape[1]} columns</p>
                 <p><strong>Data columns used:</strong> Columns ${data.start_column} to ${data.end_column}</p>
-                
-                <h3>Position Check Style 1 (Values > 0)</h3>
+
+                ${hasNewStats ? `
+                <h3>Position Analysis</h3>
+                <div style="background-color: #f5f5f5; padding: 15px; border-radius: 5px; margin-bottom: 15px;">
+                    <p style="margin: 8px 0;"><strong>1. Total positions analyzed:</strong> ${data.position_stats.total_positions.toLocaleString()}</p>
+                    <p style="margin: 8px 0;"><strong>2. จำนวนช่องที่ = 0 ในที่ส่งไป และ = 0 ใน ground truth:</strong> ${data.position_stats.both_zero.toLocaleString()} positions</p>
+                    <p style="margin: 8px 0;"><strong>3. จำนวนช่องที่ != 0 ในที่ส่งไป และ != 0 ใน ground truth:</strong> <span style="color: #4CAF50;">${data.position_stats.both_nonzero.toLocaleString()}</span> positions</p>
+                    <p style="margin: 8px 0;"><strong>4. จำนวนช่องที่ != 0 ในที่ส่งไป แต่ = 0 ใน ground truth:</strong> <span style="color: #ff9800;">${data.position_stats.submission_nonzero_truth_zero.toLocaleString()}</span> positions</p>
+                    <p style="margin: 8px 0;"><strong>5. จำนวนช่องที่ = 0 ในที่ส่งไป แต่ != 0 ใน ground truth:</strong> <span style="color: #f44336;">${data.position_stats.submission_zero_truth_nonzero.toLocaleString()}</span> positions</p>
+                </div>
+
+                ${(data.position_stats.submission_nonzero_truth_zero > 0 || data.position_stats.submission_zero_truth_nonzero > 0) ? `
+                <div style="background-color: #fff3cd; padding: 10px; border-radius: 5px; margin-bottom: 15px; border-left: 4px solid #ffc107;">
+                    <strong>⚠️ Interpretation:</strong><br>
+                    ${data.position_stats.submission_nonzero_truth_zero > 0 ? 
+                        `<span style="color: #ff6f00;">• Your submission has ${data.position_stats.submission_nonzero_truth_zero.toLocaleString()} extra non-zero predictions</span><br>` : ''}
+                    ${data.position_stats.submission_zero_truth_nonzero > 0 ? 
+                        `<span style="color: #d32f2f;">• Your submission missed ${data.position_stats.submission_zero_truth_nonzero.toLocaleString()} positions that should be non-zero</span>` : ''}
+                </div>
+                ` : `
+                <div style="background-color: #e8f5e9; padding: 10px; border-radius: 5px; margin-bottom: 15px; border-left: 4px solid #4CAF50;">
+                    <strong>✓ Perfect alignment:</strong> All zeros and non-zeros match exactly
+                </div>
+                `}
+                ` : `
+                <h3>Position Check (Values > 0)</h3>
                 <p><strong>✓ Matching positions:</strong> ${data.position_stats.matches.toLocaleString()} positions (${matchPercentage}%)</p>
                 <p><strong>✗ Non-matching positions:</strong> <span style="color: ${data.position_stats.mismatches === 0 ? '#4CAF50' : '#f44336'};">${data.position_stats.mismatches.toLocaleString()}</span> positions (${mismatchPercentage}%)</p>
                 <p style="margin-left: 20px; font-size: 0.9em;">
@@ -428,27 +461,8 @@ HTML_TEMPLATE = '''
                     • Only submission > 0: ${data.position_stats.only_submission_positive.toLocaleString()} positions
                 </p>
                 <p><strong>Total positions analyzed:</strong> ${data.position_stats.total_positions.toLocaleString()}</p>
+                `}
                 
-                ${positionInterpretation}
-                
-                <p style="margin-top: 20px;"><strong>Processing time:</strong> ${data.processing_time || 'N/A'} seconds</p>
-
-                <h3>Position Check Style 2 (Values > 0)</h3>
-                <div style="background-color: #f5f5f5; padding: 15px; border-radius: 5px; margin-bottom: 15px;">
-                    <p style="margin: 5px 0;"><strong>Total positions analyzed:</strong> ${data.position_stats.total_positions.toLocaleString()}</p>
-                    <p style="margin: 5px 0;"><strong>Positions with positive values in both files:</strong> <span style="color: #4CAF50; font-weight: bold;">${data.position_stats.matches.toLocaleString()}</span> (${matchPercentage}%)</p>
-                    <p style="margin: 5px 0;"><strong>Position mismatches:</strong> <span style="color: ${data.position_stats.mismatches === 0 ? '#4CAF50' : '#f44336'}; font-weight: bold;">${data.position_stats.mismatches.toLocaleString()}</span> (${mismatchPercentage}%)</p>
-                </div>
-
-                ${data.position_stats.mismatches > 0 ? `
-                <div style="background-color: #fff3cd; padding: 10px; border-radius: 5px; margin-bottom: 15px; border-left: 4px solid #ffc107;">
-                    <strong>Mismatch Details:</strong><br>
-                    <span style="color: #856404;">
-                    • Ground truth has positive value, submission doesn't: ${data.position_stats.only_groundtruth_positive.toLocaleString()} positions<br>
-                    • Submission has positive value, ground truth doesn't: ${data.position_stats.only_submission_positive.toLocaleString()} positions
-                    </span>
-                </div>
-                ` : ''}
                 <p style="margin-top: 20px;"><strong>Processing time:</strong> ${data.processing_time || 'N/A'} seconds</p>
 
                 ${data.warnings ? '<p style="color: orange;"><strong>Warnings:</strong> ' + data.warnings + '</p>' : ''}
@@ -492,65 +506,43 @@ def check_for_null_values(df, name):
     return null_info
 
 def calculate_position_matches(df_observe, df_predict):
-    """Calculate position matches for values > 0
+    """Calculate position matches based on zero and non-zero values
     
-    Parameters:
-    -----------
-    df_observe : pd.DataFrame
-        Ground truth dataframe
-    df_predict : pd.DataFrame
-        Submission/prediction dataframe
-        
-    Returns:
-    --------
-    dict : Statistics about position matches
+    Following the friend's suggestion:
+    1. Total positions
+    2. Both are zero
+    3. Both are non-zero  
+    4. Submission non-zero but ground truth zero
+    5. Submission zero but ground truth non-zero
     """
-    # Ensure dataframes have the same shape
-    if df_observe.shape != df_predict.shape:
-        raise ValueError(f"Shape mismatch: observe {df_observe.shape} vs predict {df_predict.shape}")
+    # Get boolean masks
+    obs_zero = df_observe == 0
+    pred_zero = df_predict == 0
+    obs_nonzero = df_observe != 0
+    pred_nonzero = df_predict != 0
     
-    # Get boolean masks for values > 0
-    obs_positive = df_observe > 0
-    pred_positive = df_predict > 0
+    # Calculate all cases
+    both_zero = (obs_zero & pred_zero).sum().sum()
+    both_nonzero = (obs_nonzero & pred_nonzero).sum().sum()
+    pred_nonzero_obs_zero = (pred_nonzero & obs_zero).sum().sum()
+    pred_zero_obs_nonzero = (pred_zero & obs_nonzero).sum().sum()
     
-    # Both have values > 0 at same position (true positives)
-    both_positive = obs_positive & pred_positive
-    
-    # Only one has value > 0 (mismatch)
-    mismatch = obs_positive != pred_positive
-    
-    # Both have values <= 0 (true negatives)
-    both_non_positive = ~obs_positive & ~pred_positive
-    
-    # Count matches and mismatches
-    matches = both_positive.sum().sum()
-    mismatches = mismatch.sum().sum()
-    true_negatives = both_non_positive.sum().sum()
-    
-    # Additional stats
-    only_obs_positive = (obs_positive & ~pred_positive).sum().sum()
-    only_pred_positive = (~obs_positive & pred_positive).sum().sum()
-    
-    # Calculate accuracy metrics
     total_positions = df_observe.size
-    accuracy = (matches + true_negatives) / total_positions if total_positions > 0 else 0
     
-    # Calculate precision and recall for positive predictions
-    precision = matches / (matches + only_pred_positive) if (matches + only_pred_positive) > 0 else 0
-    recall = matches / (matches + only_obs_positive) if (matches + only_obs_positive) > 0 else 0
-    f1_score = 2 * (precision * recall) / (precision + recall) if (precision + recall) > 0 else 0
-    
+    # IMPORTANT: Keep the old keys for backward compatibility
+    # AND add the new keys
     return {
-        'matches': int(matches),
-        'mismatches': int(mismatches),
-        'true_negatives': int(true_negatives),
-        'only_groundtruth_positive': int(only_obs_positive),
-        'only_submission_positive': int(only_pred_positive),
+        # Old keys (for compatibility)
+        'matches': int(both_nonzero),
+        'mismatches': int(pred_nonzero_obs_zero + pred_zero_obs_nonzero),
+        'only_groundtruth_positive': int(pred_zero_obs_nonzero),
+        'only_submission_positive': int(pred_nonzero_obs_zero),
         'total_positions': int(total_positions),
-        'accuracy': round(accuracy, 4),
-        'precision': round(precision, 4),
-        'recall': round(recall, 4),
-        'f1_score': round(f1_score, 4)
+        # New keys for the updated display
+        'both_zero': int(both_zero),
+        'both_nonzero': int(both_nonzero),
+        'submission_nonzero_truth_zero': int(pred_nonzero_obs_zero),
+        'submission_zero_truth_nonzero': int(pred_zero_obs_nonzero)
     }
 
 def pbias_abs(df_observe, df_predict):
@@ -568,6 +560,10 @@ def pbias_abs(df_observe, df_predict):
 def index():
     """Render the main page"""
     return render_template_string(HTML_TEMPLATE)
+
+@app.route('/static/<path:filename>')
+def serve_static(filename):
+    return send_from_directory('static', filename)
 
 @app.route('/check_default_groundtruth')
 def check_default_groundtruth():

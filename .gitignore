@@ -23,4 +23,7 @@ Thumbs.db
 # Project specific
 *.csv
 temp/
-uploads/
+uploads/ngrok
+ngrok-v3-stable-linux-amd64.tgz
+start_server.sh
+truth_allah.csv
