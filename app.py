@@ -5,6 +5,7 @@ import numpy as np
 import os
 from werkzeug.utils import secure_filename
 import tempfile
+from sklearn.model_selection import train_test_split
 
 app = Flask(__name__)
 CORS(app)
@@ -36,7 +37,7 @@ HTML_TEMPLATE = '''
         }
         .container {
             background-color: white;
-            padding: 30px;
+            padding: 40px;
             border-radius: 10px;
             box-shadow: 0 2px 10px rgba(0,0,0,0.1);
         }
@@ -184,7 +185,7 @@ HTML_TEMPLATE = '''
         
         <h1>House EXP PBIAS Score Calculator</h1>
         <div class="info">
-            <strong>💙Property of House EXP: Calculator Service💙</strong><br>
+            <strong>💙 Property of House EXP: Calculator Service 💙</strong><br>
             Maximum file size: 200MB per CSV<br>
             <small>Permanent URL: Save this link for future use!</small>
         </div>
@@ -367,9 +368,24 @@ HTML_TEMPLATE = '''
             // Check if we have the new stats format
             const hasNewStats = data.position_stats.both_zero !== undefined;
             
+            // Helper function to create position stats display
+            function createPositionStatsDisplay(stats, title, color) {
+                return `
+                <div style="background-color: ${color}15; padding: 15px; border-radius: 8px; border-left: 4px solid ${color};">
+                    <h4 style="margin: 0 0 10px 0; color: ${color};">${title}</h4>
+                    <div style="font-size: 0.9em; line-height: 1.6;">
+                        <p style="margin: 5px 0;"><strong>1. Total positions analyzed:</strong> ${stats.total_positions.toLocaleString()}</p>
+                        <p style="margin: 5px 0;"><strong>2. จำนวนช่องที่ = 0 ในที่ส่งไป และ = 0 ใน ground truth:</strong> ${stats.both_zero.toLocaleString()}</p>
+                        <p style="margin: 5px 0;"><strong>3. จำนวนช่องที่ != 0 ในที่ส่งไป และ != 0 ใน ground truth:</strong> <span style="color: #4CAF50; font-weight: bold;">${stats.both_nonzero.toLocaleString()}</span></p>
+                        <p style="margin: 5px 0;"><strong>4. จำนวนช่องที่ != 0 ในที่ส่งไป แต่ = 0 ใน ground truth:</strong> <span style="color: #ff9800;">${stats.submission_nonzero_truth_zero.toLocaleString()}</span></p>
+                        <p style="margin: 5px 0;"><strong>5. จำนวนช่องที่ = 0 ในที่ส่งไป แต่ != 0 ใน ground truth:</strong> <span style="color: #f44336;">${stats.submission_zero_truth_nonzero.toLocaleString()}</span></p>
+                    </div>
+                </div>
+                `;
+            }
+            
             // Create status message based on results
             let statusMessage = '';
-            let statusClass = '';
             
             if (isPerfectMatch) {
                 statusMessage = `
@@ -402,24 +418,8 @@ HTML_TEMPLATE = '''
                 `;
             }
             
-            // Create position match interpretation
-            let positionInterpretation = '';
-            if (data.position_stats.mismatches === 0 && data.position_stats.matches > 0) {
-                positionInterpretation = `
-                    <div style="background-color: #e8f5e9; padding: 10px; border-radius: 5px; margin-top: 10px; border-left: 4px solid #4CAF50;">
-                        <strong>Perfect Position Alignment:</strong> Every positive value in the ground truth has a corresponding positive value in the submission
-                    </div>
-                `;
-            } else if (data.position_stats.mismatches > 0) {
-                const mismatchPercent = ((data.position_stats.mismatches / (data.position_stats.matches + data.position_stats.mismatches)) * 100).toFixed(1);
-                positionInterpretation = `
-                    <div style="background-color: #fff3cd; padding: 10px; border-radius: 5px; margin-top: 10px; border-left: 4px solid #ffc107;">
-                        <strong>Position Mismatch Alert:</strong> ${mismatchPercent}% of positive positions don't align between files
-                    </div>
-                `;
-            }
-            
-            resultDiv.innerHTML = `
+            // Build the complete result HTML
+            let resultHTML = `
                 <h2>Results</h2>
                 ${statusMessage}
                 
@@ -428,47 +428,79 @@ HTML_TEMPLATE = '''
                 <p><strong>Submission shape:</strong> ${data.submission_shape[0]} rows × ${data.submission_shape[1]} columns</p>
                 <p><strong>Ground truth shape:</strong> ${data.groundtruth_shape[0]} rows × ${data.groundtruth_shape[1]} columns</p>
                 <p><strong>Data columns used:</strong> Columns ${data.start_column} to ${data.end_column}</p>
+            `;
 
-                ${hasNewStats ? `
-                <h3>Position Analysis</h3>
+            // Add Competition-Style Evaluation if we have public/private data
+            if (data.pbias_public !== undefined && data.pbias_private !== undefined) {
+                resultHTML += `
+                <h3>Competition-Style Evaluation</h3>
+                <div style="background-color: #f0f4f8; padding: 20px; border-radius: 8px; margin-bottom: 20px;">
+                    <!-- PBIAS Scores Row -->
+                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px; margin-bottom: 20px;">
+                        <div style="background-color: #e3f2fd; padding: 15px; border-radius: 5px; border-left: 4px solid #2196f3;">
+                            <h4 style="margin: 0 0 10px 0; color: #1976d2;">📊 Public Score (50%)</h4>
+                            <p style="font-size: 1.8em; font-weight: bold; margin: 5px 0; color: #1565c0;">
+                                ${data.pbias_public.toFixed(4)}%
+                            </p>
+                            <p style="margin: 0; color: #666; font-size: 0.9em;">
+                                Based on ${data.public_rows.toLocaleString()} random rows
+                            </p>
+                        </div>
+                        
+                        <div style="background-color: #fce4ec; padding: 15px; border-radius: 5px; border-left: 4px solid #e91e63;">
+                            <h4 style="margin: 0 0 10px 0; color: #c2185b;">🔒 Private Score (50%)</h4>
+                            <p style="font-size: 1.8em; font-weight: bold; margin: 5px 0; color: #880e4f;">
+                                ${data.pbias_private.toFixed(4)}%
+                            </p>
+                            <p style="margin: 0; color: #666; font-size: 0.9em;">
+                                Based on ${data.private_rows.toLocaleString()} random rows
+                            </p>
+                        </div>
+                    </div>
+                    
+                    <!-- Position Analysis Row -->
+                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px;">
+                        ${data.public_position_stats ? createPositionStatsDisplay(data.public_position_stats, "Public Split Position Analysis", "#2196f3") : ''}
+                        ${data.private_position_stats ? createPositionStatsDisplay(data.private_position_stats, "Private Split Position Analysis", "#e91e63") : ''}
+                    </div>
+                    
+                    <!-- Overall Score -->
+                    <div style="margin-top: 15px; padding: 10px; background-color: #fff; border-radius: 5px;">
+                        <p style="margin: 0; text-align: center;">
+                            <strong>Overall PBIAS Score:</strong> 
+                            <span style="font-size: 1.3em; color: ${data.pbias_score < 10 ? '#4caf50' : data.pbias_score < 25 ? '#ff9800' : '#f44336'};">
+                                ${data.pbias_score.toFixed(4)}%
+                            </span>
+                        </p>
+                    </div>
+                </div>
+                `;
+            }
+
+            // Add Overall Position Analysis
+            resultHTML += `
+                <h3>Overall Position Analysis</h3>
+                ${hasNewStats ? createPositionStatsDisplay(data.position_stats, "All Data", "#9c27b0") : `
                 <div style="background-color: #f5f5f5; padding: 15px; border-radius: 5px; margin-bottom: 15px;">
-                    <p style="margin: 8px 0;"><strong>1. Total positions analyzed:</strong> ${data.position_stats.total_positions.toLocaleString()}</p>
-                    <p style="margin: 8px 0;"><strong>2. จำนวนช่องที่ = 0 ในที่ส่งไป และ = 0 ใน ground truth:</strong> ${data.position_stats.both_zero.toLocaleString()} positions</p>
-                    <p style="margin: 8px 0;"><strong>3. จำนวนช่องที่ != 0 ในที่ส่งไป และ != 0 ใน ground truth:</strong> <span style="color: #4CAF50;">${data.position_stats.both_nonzero.toLocaleString()}</span> positions</p>
-                    <p style="margin: 8px 0;"><strong>4. จำนวนช่องที่ != 0 ในที่ส่งไป แต่ = 0 ใน ground truth:</strong> <span style="color: #ff9800;">${data.position_stats.submission_nonzero_truth_zero.toLocaleString()}</span> positions</p>
-                    <p style="margin: 8px 0;"><strong>5. จำนวนช่องที่ = 0 ในที่ส่งไป แต่ != 0 ใน ground truth:</strong> <span style="color: #f44336;">${data.position_stats.submission_zero_truth_nonzero.toLocaleString()}</span> positions</p>
-                </div>
-
-                ${(data.position_stats.submission_nonzero_truth_zero > 0 || data.position_stats.submission_zero_truth_nonzero > 0) ? `
-                <div style="background-color: #fff3cd; padding: 10px; border-radius: 5px; margin-bottom: 15px; border-left: 4px solid #ffc107;">
-                    <strong>⚠️ Interpretation:</strong><br>
-                    ${data.position_stats.submission_nonzero_truth_zero > 0 ? 
-                        `<span style="color: #ff6f00;">• Your submission has ${data.position_stats.submission_nonzero_truth_zero.toLocaleString()} extra non-zero predictions</span><br>` : ''}
-                    ${data.position_stats.submission_zero_truth_nonzero > 0 ? 
-                        `<span style="color: #d32f2f;">• Your submission missed ${data.position_stats.submission_zero_truth_nonzero.toLocaleString()} positions that should be non-zero</span>` : ''}
-                </div>
-                ` : `
-                <div style="background-color: #e8f5e9; padding: 10px; border-radius: 5px; margin-bottom: 15px; border-left: 4px solid #4CAF50;">
-                    <strong>✓ Perfect alignment:</strong> All zeros and non-zeros match exactly
+                    <p><strong>✓ Matching positions:</strong> ${data.position_stats.matches.toLocaleString()} positions (${matchPercentage}%)</p>
+                    <p><strong>✗ Non-matching positions:</strong> <span style="color: ${data.position_stats.mismatches === 0 ? '#4CAF50' : '#f44336'};">${data.position_stats.mismatches.toLocaleString()}</span> positions (${mismatchPercentage}%)</p>
+                    <p style="margin-left: 20px; font-size: 0.9em;">
+                        • Only ground truth > 0: ${data.position_stats.only_groundtruth_positive.toLocaleString()} positions<br>
+                        • Only submission > 0: ${data.position_stats.only_submission_positive.toLocaleString()} positions
+                    </p>
+                    <p><strong>Total positions analyzed:</strong> ${data.position_stats.total_positions.toLocaleString()}</p>
                 </div>
                 `}
-                ` : `
-                <h3>Position Check (Values > 0)</h3>
-                <p><strong>✓ Matching positions:</strong> ${data.position_stats.matches.toLocaleString()} positions (${matchPercentage}%)</p>
-                <p><strong>✗ Non-matching positions:</strong> <span style="color: ${data.position_stats.mismatches === 0 ? '#4CAF50' : '#f44336'};">${data.position_stats.mismatches.toLocaleString()}</span> positions (${mismatchPercentage}%)</p>
-                <p style="margin-left: 20px; font-size: 0.9em;">
-                    • Only ground truth > 0: ${data.position_stats.only_groundtruth_positive.toLocaleString()} positions<br>
-                    • Only submission > 0: ${data.position_stats.only_submission_positive.toLocaleString()} positions
-                </p>
-                <p><strong>Total positions analyzed:</strong> ${data.position_stats.total_positions.toLocaleString()}</p>
-                `}
-                
+            `;
+            
+            // Add processing time and warnings
+            resultHTML += `
                 <p style="margin-top: 20px;"><strong>Processing time:</strong> ${data.processing_time || 'N/A'} seconds</p>
-
                 ${data.warnings ? '<p style="color: orange;"><strong>Warnings:</strong> ' + data.warnings + '</p>' : ''}
-                
                 ${isPerfectMatch ? '<p style="text-align: center; margin-top: 20px; font-style: italic; color: #666;">💡 Tip: Try testing with a different submission file to see actual bias calculations</p>' : ''}
             `;
+            
+            resultDiv.innerHTML = resultHTML;
             resultDiv.style.display = 'block';
         }
         
@@ -504,6 +536,52 @@ def check_for_null_values(df, name):
         for col, count in null_cols.items():
             null_info.append(f"{name}: Column '{col}' has {count} null values")
     return null_info
+
+def calculate_split_pbias_sklearn(df_observe, df_predict, split_ratio=0.5, random_seed=42):
+    """Calculate PBIAS and position stats for public/private splits"""
+    
+    # Create indices
+    indices = np.arange(len(df_observe))
+    
+    # Random split
+    public_idx, private_idx = train_test_split(
+        indices, 
+        test_size=(1 - split_ratio), 
+        random_state=random_seed,
+        shuffle=True
+    )
+    
+    # Split the data
+    public_observe = df_observe.iloc[public_idx]
+    public_predict = df_predict.iloc[public_idx]
+    
+    private_observe = df_observe.iloc[private_idx]
+    private_predict = df_predict.iloc[private_idx]
+    
+    # Calculate PBIAS for each split
+    overall_pbias = pbias_abs(df_observe, df_predict)
+    public_pbias = pbias_abs(public_observe, public_predict)
+    private_pbias = pbias_abs(private_observe, private_predict)
+    
+    # Calculate position stats for overall
+    overall_positions = calculate_position_matches(df_observe, df_predict)
+    
+    # Calculate position stats for public split
+    public_positions = calculate_position_matches(public_observe, public_predict)
+    
+    # Calculate position stats for private split
+    private_positions = calculate_position_matches(private_observe, private_predict)
+    
+    return {
+        'overall': overall_pbias,
+        'public': public_pbias,
+        'private': private_pbias,
+        'public_rows': len(public_idx),
+        'private_rows': len(private_idx),
+        'position_stats': overall_positions,
+        'public_position_stats': public_positions,
+        'private_position_stats': private_positions
+    }
 
 def calculate_position_matches(df_observe, df_predict):
     """Calculate position matches based on zero and non-zero values
@@ -679,8 +757,13 @@ def calculate_pbias():
                 }), 400
             
             # Calculate PBIAS using columns from index 5 onwards
-            pbias_score = pbias_abs(groundtruth_data.iloc[:, 5:], uploaded_data.iloc[:, 5:])
-            
+            pbias_results = calculate_split_pbias_sklearn(
+                groundtruth_data.iloc[:, 5:], 
+                uploaded_data.iloc[:, 5:],
+                split_ratio=0.5,
+                random_seed=69420
+            )
+
             # Calculate position matches
             position_stats = calculate_position_matches(
                 groundtruth_data.iloc[:, 5:], 
@@ -689,23 +772,35 @@ def calculate_pbias():
             
             # Check for warnings
             warnings = []
-            if np.isnan(pbias_score):
+            if np.isnan(pbias_results['overall']):  # ✅ Use pbias_results['overall'] instead
                 warnings.append("PBIAS score is NaN (possibly due to zero values in ground truth)")
-                pbias_score = 0.0  # Convert NaN to 0 for display
+                pbias_results['overall'] = 0.0  # Convert NaN to 0 for display
+
+            # Also, make sure you handle NaN for public and private scores:
+            if np.isnan(pbias_results['public']):
+                pbias_results['public'] = 0.0
+            if np.isnan(pbias_results['private']):
+                pbias_results['private'] = 0.0
             
             # Calculate processing time
             processing_time = round(time.time() - start_time, 2)
             
             # Prepare response
             response = {
-                'pbias_score': float(pbias_score),
+                'pbias_score': float(pbias_results['overall']),
+                'pbias_public': float(pbias_results['public']),
+                'pbias_private': float(pbias_results['private']),
+                'public_rows': pbias_results['public_rows'],
+                'private_rows': pbias_results['private_rows'],
                 'submission_shape': list(uploaded_data.shape),
                 'groundtruth_shape': list(groundtruth_data.shape),
                 'start_column': 6,
                 'end_column': uploaded_data.shape[1],
                 'processing_time': processing_time,
                 'used_default': used_default,
-                'position_stats': position_stats
+                'position_stats': pbias_results['position_stats'],
+                'public_position_stats': pbias_results['public_position_stats'],
+                'private_position_stats': pbias_results['private_position_stats']
             }
             
             if warnings:
