@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>PBIAS Calculator - Large File Support</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+</head>
+<body>
+    <div class="container">
+        <div style="text-align: center; margin-bottom: 25px;">
+            <img src="/static/exp_logo.png" 
+                 alt="House EXP Logo" 
+                 style="max-width: 200px; height: auto;">
+        </div>
+        
+        <h1>House EXP PBIAS Score Calculator</h1>
+        <div class="info">
+            <strong>💙 Property of House EXP: Calculator Service 💙</strong><br>
+            Maximum file size: 200MB per CSV<br>
+            <small>Permanent URL: Save this link for future use!</small>
+        </div>
+        
+        <div class="default-info">
+            <strong>📌 Default Ground Truth:</strong> <span id="defaultStatus">Checking...</span><br>
+            <span class="small-text">You can use the default ground truth file or upload your own below</span>
+        </div>
+        
+        <form id="uploadForm">
+            <div class="upload-section">
+                <label for="submission">Upload Submission CSV: <span style="color: red;">*</span></label>
+                <input type="file" id="submission" name="submission" accept=".csv" required>
+            </div>
+            
+            <div class="upload-section optional-section">
+                <label for="groundtruth" class="optional-label">Upload Ground Truth CSV (Optional):</label>
+                <input type="file" id="groundtruth" name="groundtruth" accept=".csv">
+                <div class="checkbox-container">
+                    <input type="checkbox" id="useDefault" name="useDefault" checked>
+                    <label for="useDefault" style="font-weight: normal; margin-bottom: 0;">Use default ground truth file</label>
+                </div>
+                <span class="small-text">Leave empty to use the default ground truth file</span>
+            </div>
+            
+            <button type="submit">Calculate PBIAS Score</button>
+        </form>
+        
+        <div class="loading">
+            <div class="spinner"></div>
+            <p>Processing large files...</p>
+            <div class="progress">
+                <div class="progress-bar" id="progressBar"></div>
+            </div>
+            <p><small>This may take up to a minute for 70MB+ files</small></p>
+        </div>
+        
+        <div id="result" class="result"></div>
+        <div id="error" class="error"></div>
+    </div>
+
+    <script src="{{ url_for('static', filename='app.js') }}"></script>
+</body>
+</html>

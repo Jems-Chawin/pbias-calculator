@@ -1,0 +1,9 @@
+your-project/
+├── app.py                 # Flask backend (Python)
+├── templates/
+│   └── index.html        # HTML template
+├── static/
+│   ├── styles.css        # CSS styles
+│   ├── app.js            # JavaScript application logic
+│   └── exp_logo.png      # Logo image (you need to add this)
+└── groundtruth.csv       # Default ground truth file
