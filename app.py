@@ -117,6 +117,13 @@ HTML_TEMPLATE = '''
             border-radius: 5px;
             display: none;
         }
+        .result h3 {
+            margin-top: 20px;
+            margin-bottom: 10px;
+            color: #2e7d32;
+            border-bottom: 2px solid #4caf50;
+            padding-bottom: 5px;
+        }
         .error {
             background-color: #ffebee;
             color: #c62828;
@@ -344,15 +351,109 @@ HTML_TEMPLATE = '''
             const resultDiv = document.getElementById('result');
             const groundtruthSource = data.used_default ? 'Default ground truth' : 'Uploaded ground truth';
             
+            // Calculate percentage for position stats
+            const matchPercentage = ((data.position_stats.matches / data.position_stats.total_positions) * 100).toFixed(2);
+            const mismatchPercentage = ((data.position_stats.mismatches / data.position_stats.total_positions) * 100).toFixed(2);
+            
+            // Check if this is a perfect match (likely testing with identical files)
+            const isPerfectMatch = data.pbias_score === 0 && data.position_stats.mismatches === 0;
+            
+            // Create status message based on results
+            let statusMessage = '';
+            let statusClass = '';
+            
+            if (isPerfectMatch) {
+                statusMessage = `
+                    <div style="background-color: #4CAF50; color: white; padding: 15px; border-radius: 5px; margin-bottom: 20px; text-align: center;">
+                        <strong>⚠️ PERFECT MATCH DETECTED</strong><br>
+                        <span style="font-size: 0.9em;">The submission is identical to the ground truth file</span><br>
+                        <span style="font-size: 0.8em; opacity: 0.9;">This typically indicates you're testing with the same file</span>
+                    </div>
+                `;
+            } else if (data.pbias_score < 10) {
+                statusMessage = `
+                    <div style="background-color: #4CAF50; color: white; padding: 15px; border-radius: 5px; margin-bottom: 20px; text-align: center;">
+                        <strong>✅ EXCELLENT RESULT</strong><br>
+                        <span style="font-size: 0.9em;">Your PBIAS score indicates very low bias</span>
+                    </div>
+                `;
+            } else if (data.pbias_score < 25) {
+                statusMessage = `
+                    <div style="background-color: #ff9800; color: white; padding: 15px; border-radius: 5px; margin-bottom: 20px; text-align: center;">
+                        <strong>⚡ MODERATE RESULT</strong><br>
+                        <span style="font-size: 0.9em;">Your PBIAS score indicates moderate bias</span>
+                    </div>
+                `;
+            } else {
+                statusMessage = `
+                    <div style="background-color: #f44336; color: white; padding: 15px; border-radius: 5px; margin-bottom: 20px; text-align: center;">
+                        <strong>⚠️ HIGH BIAS DETECTED</strong><br>
+                        <span style="font-size: 0.9em;">Your PBIAS score indicates significant bias</span>
+                    </div>
+                `;
+            }
+            
+            // Create position match interpretation
+            let positionInterpretation = '';
+            if (data.position_stats.mismatches === 0 && data.position_stats.matches > 0) {
+                positionInterpretation = `
+                    <div style="background-color: #e8f5e9; padding: 10px; border-radius: 5px; margin-top: 10px; border-left: 4px solid #4CAF50;">
+                        <strong>Perfect Position Alignment:</strong> Every positive value in the ground truth has a corresponding positive value in the submission
+                    </div>
+                `;
+            } else if (data.position_stats.mismatches > 0) {
+                const mismatchPercent = ((data.position_stats.mismatches / (data.position_stats.matches + data.position_stats.mismatches)) * 100).toFixed(1);
+                positionInterpretation = `
+                    <div style="background-color: #fff3cd; padding: 10px; border-radius: 5px; margin-top: 10px; border-left: 4px solid #ffc107;">
+                        <strong>Position Mismatch Alert:</strong> ${mismatchPercent}% of positive positions don't align between files
+                    </div>
+                `;
+            }
+            
             resultDiv.innerHTML = `
                 <h2>Results</h2>
-                <p><strong>PBIAS Score:</strong> ${data.pbias_score.toFixed(4)}%</p>
+                ${statusMessage}
+                
+                <p><strong>PBIAS Score:</strong> <span style="font-size: 1.2em; font-weight: bold; color: ${data.pbias_score === 0 ? '#4CAF50' : '#333'};">${data.pbias_score.toFixed(4)}%</span></p>
                 <p><strong>Ground Truth Used:</strong> ${groundtruthSource}</p>
                 <p><strong>Submission shape:</strong> ${data.submission_shape[0]} rows × ${data.submission_shape[1]} columns</p>
                 <p><strong>Ground truth shape:</strong> ${data.groundtruth_shape[0]} rows × ${data.groundtruth_shape[1]} columns</p>
                 <p><strong>Data columns used:</strong> Columns ${data.start_column} to ${data.end_column}</p>
-                <p><strong>Processing time:</strong> ${data.processing_time || 'N/A'} seconds</p>
+                
+                <h3>Position Check Style 1 (Values > 0)</h3>
+                <p><strong>✓ Matching positions:</strong> ${data.position_stats.matches.toLocaleString()} positions (${matchPercentage}%)</p>
+                <p><strong>✗ Non-matching positions:</strong> <span style="color: ${data.position_stats.mismatches === 0 ? '#4CAF50' : '#f44336'};">${data.position_stats.mismatches.toLocaleString()}</span> positions (${mismatchPercentage}%)</p>
+                <p style="margin-left: 20px; font-size: 0.9em;">
+                    • Only ground truth > 0: ${data.position_stats.only_groundtruth_positive.toLocaleString()} positions<br>
+                    • Only submission > 0: ${data.position_stats.only_submission_positive.toLocaleString()} positions
+                </p>
+                <p><strong>Total positions analyzed:</strong> ${data.position_stats.total_positions.toLocaleString()}</p>
+                
+                ${positionInterpretation}
+                
+                <p style="margin-top: 20px;"><strong>Processing time:</strong> ${data.processing_time || 'N/A'} seconds</p>
+
+                <h3>Position Check Style 2 (Values > 0)</h3>
+                <div style="background-color: #f5f5f5; padding: 15px; border-radius: 5px; margin-bottom: 15px;">
+                    <p style="margin: 5px 0;"><strong>Total positions analyzed:</strong> ${data.position_stats.total_positions.toLocaleString()}</p>
+                    <p style="margin: 5px 0;"><strong>Positions with positive values in both files:</strong> <span style="color: #4CAF50; font-weight: bold;">${data.position_stats.matches.toLocaleString()}</span> (${matchPercentage}%)</p>
+                    <p style="margin: 5px 0;"><strong>Position mismatches:</strong> <span style="color: ${data.position_stats.mismatches === 0 ? '#4CAF50' : '#f44336'}; font-weight: bold;">${data.position_stats.mismatches.toLocaleString()}</span> (${mismatchPercentage}%)</p>
+                </div>
+
+                ${data.position_stats.mismatches > 0 ? `
+                <div style="background-color: #fff3cd; padding: 10px; border-radius: 5px; margin-bottom: 15px; border-left: 4px solid #ffc107;">
+                    <strong>Mismatch Details:</strong><br>
+                    <span style="color: #856404;">
+                    • Ground truth has positive value, submission doesn't: ${data.position_stats.only_groundtruth_positive.toLocaleString()} positions<br>
+                    • Submission has positive value, ground truth doesn't: ${data.position_stats.only_submission_positive.toLocaleString()} positions
+                    </span>
+                </div>
+                ` : ''}
+                <p style="margin-top: 20px;"><strong>Processing time:</strong> ${data.processing_time || 'N/A'} seconds</p>
+
                 ${data.warnings ? '<p style="color: orange;"><strong>Warnings:</strong> ' + data.warnings + '</p>' : ''}
+                
+                ${isPerfectMatch ? '<p style="text-align: center; margin-top: 20px; font-style: italic; color: #666;">💡 Tip: Try testing with a different submission file to see actual bias calculations</p>' : ''}
             `;
             resultDiv.style.display = 'block';
         }
@@ -389,6 +490,68 @@ def check_for_null_values(df, name):
         for col, count in null_cols.items():
             null_info.append(f"{name}: Column '{col}' has {count} null values")
     return null_info
+
+def calculate_position_matches(df_observe, df_predict):
+    """Calculate position matches for values > 0
+    
+    Parameters:
+    -----------
+    df_observe : pd.DataFrame
+        Ground truth dataframe
+    df_predict : pd.DataFrame
+        Submission/prediction dataframe
+        
+    Returns:
+    --------
+    dict : Statistics about position matches
+    """
+    # Ensure dataframes have the same shape
+    if df_observe.shape != df_predict.shape:
+        raise ValueError(f"Shape mismatch: observe {df_observe.shape} vs predict {df_predict.shape}")
+    
+    # Get boolean masks for values > 0
+    obs_positive = df_observe > 0
+    pred_positive = df_predict > 0
+    
+    # Both have values > 0 at same position (true positives)
+    both_positive = obs_positive & pred_positive
+    
+    # Only one has value > 0 (mismatch)
+    mismatch = obs_positive != pred_positive
+    
+    # Both have values <= 0 (true negatives)
+    both_non_positive = ~obs_positive & ~pred_positive
+    
+    # Count matches and mismatches
+    matches = both_positive.sum().sum()
+    mismatches = mismatch.sum().sum()
+    true_negatives = both_non_positive.sum().sum()
+    
+    # Additional stats
+    only_obs_positive = (obs_positive & ~pred_positive).sum().sum()
+    only_pred_positive = (~obs_positive & pred_positive).sum().sum()
+    
+    # Calculate accuracy metrics
+    total_positions = df_observe.size
+    accuracy = (matches + true_negatives) / total_positions if total_positions > 0 else 0
+    
+    # Calculate precision and recall for positive predictions
+    precision = matches / (matches + only_pred_positive) if (matches + only_pred_positive) > 0 else 0
+    recall = matches / (matches + only_obs_positive) if (matches + only_obs_positive) > 0 else 0
+    f1_score = 2 * (precision * recall) / (precision + recall) if (precision + recall) > 0 else 0
+    
+    return {
+        'matches': int(matches),
+        'mismatches': int(mismatches),
+        'true_negatives': int(true_negatives),
+        'only_groundtruth_positive': int(only_obs_positive),
+        'only_submission_positive': int(only_pred_positive),
+        'total_positions': int(total_positions),
+        'accuracy': round(accuracy, 4),
+        'precision': round(precision, 4),
+        'recall': round(recall, 4),
+        'f1_score': round(f1_score, 4)
+    }
 
 def pbias_abs(df_observe, df_predict):
     """Calculate absolute percent bias between observed and predicted dataframes"""
@@ -522,6 +685,12 @@ def calculate_pbias():
             # Calculate PBIAS using columns from index 5 onwards
             pbias_score = pbias_abs(groundtruth_data.iloc[:, 5:], uploaded_data.iloc[:, 5:])
             
+            # Calculate position matches
+            position_stats = calculate_position_matches(
+                groundtruth_data.iloc[:, 5:], 
+                uploaded_data.iloc[:, 5:]
+            )
+            
             # Check for warnings
             warnings = []
             if np.isnan(pbias_score):
@@ -539,7 +708,8 @@ def calculate_pbias():
                 'start_column': 6,
                 'end_column': uploaded_data.shape[1],
                 'processing_time': processing_time,
-                'used_default': used_default
+                'used_default': used_default,
+                'position_stats': position_stats
             }
             
             if warnings:
