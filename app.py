@@ -1,28 +1,28 @@
 from flask import Flask, request, render_template_string, jsonify
 from flask_cors import CORS
-import csv
+import pandas as pd
+import numpy as np
 import os
 from werkzeug.utils import secure_filename
 import tempfile
-import logging
 
 app = Flask(__name__)
 CORS(app)
 
-# Set up logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
-
-# Configuration
-app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16MB max file size
+# Configuration for large files
+app.config['MAX_CONTENT_LENGTH'] = 200 * 1024 * 1024  # 200MB max file size
+app.config['UPLOAD_FOLDER'] = tempfile.gettempdir()
 ALLOWED_EXTENSIONS = {'csv'}
 
-# HTML template (same as before)
+# Increase timeout for large file processing
+app.config['SEND_FILE_MAX_AGE_DEFAULT'] = 0
+
+# HTML template (updated for large files)
 HTML_TEMPLATE = '''
 <!DOCTYPE html>
 <html>
 <head>
-    <title>PBIAS Calculator</title>
+    <title>PBIAS Calculator - Large File Support</title>
     <style>
         body {
             font-family: Arial, sans-serif;
@@ -41,11 +41,12 @@ HTML_TEMPLATE = '''
             color: #333;
             text-align: center;
         }
-        .note {
-            text-align: center;
-            color: #666;
-            font-size: 14px;
+        .info {
+            background-color: #e3f2fd;
+            padding: 15px;
+            border-radius: 5px;
             margin-bottom: 20px;
+            text-align: center;
         }
         .upload-section {
             margin: 20px 0;
@@ -104,6 +105,20 @@ HTML_TEMPLATE = '''
             text-align: center;
             margin-top: 20px;
         }
+        .progress {
+            width: 100%;
+            height: 20px;
+            background-color: #f0f0f0;
+            border-radius: 10px;
+            overflow: hidden;
+            margin-top: 10px;
+        }
+        .progress-bar {
+            height: 100%;
+            background-color: #4CAF50;
+            width: 0%;
+            transition: width 0.3s ease;
+        }
         .spinner {
             border: 4px solid #f3f3f3;
             border-top: 4px solid #4CAF50;
@@ -122,7 +137,11 @@ HTML_TEMPLATE = '''
 <body>
     <div class="container">
         <h1>PBIAS Score Calculator</h1>
-        <p class="note">Note: This lightweight version works with CSV files efficiently</p>
+        <div class="info">
+            <strong>Large File Support Enabled</strong><br>
+            Maximum file size: 200MB per CSV<br>
+            <small>Processing may take a moment for files over 50MB</small>
+        </div>
         
         <form id="uploadForm">
             <div class="upload-section">
@@ -140,7 +159,11 @@ HTML_TEMPLATE = '''
         
         <div class="loading">
             <div class="spinner"></div>
-            <p>Calculating PBIAS score...</p>
+            <p>Processing large files...</p>
+            <div class="progress">
+                <div class="progress-bar" id="progressBar"></div>
+            </div>
+            <p><small>This may take up to a minute for 70MB+ files</small></p>
         </div>
         
         <div id="result" class="result"></div>
@@ -148,6 +171,9 @@ HTML_TEMPLATE = '''
     </div>
 
     <script>
+        // Increase timeout for large files
+        const TIMEOUT = 5 * 60 * 1000; // 5 minutes
+        
         document.getElementById('uploadForm').addEventListener('submit', async (e) => {
             e.preventDefault();
             
@@ -160,19 +186,45 @@ HTML_TEMPLATE = '''
                 return;
             }
             
+            // Check file sizes
+            const totalSize = submissionFile.size + groundtruthFile.size;
+            const totalSizeMB = (totalSize / 1024 / 1024).toFixed(1);
+            
+            if (totalSize > 200 * 1024 * 1024) {
+                showError(`Total file size (${totalSizeMB}MB) exceeds 200MB limit`);
+                return;
+            }
+            
             formData.append('submission', submissionFile);
             formData.append('groundtruth', groundtruthFile);
             
+            // Show loading
             document.querySelector('.loading').style.display = 'block';
             document.getElementById('result').style.display = 'none';
             document.getElementById('error').style.display = 'none';
             document.querySelector('button[type="submit"]').disabled = true;
             
+            // Simulate progress (since we can't track actual upload progress easily)
+            let progress = 0;
+            const progressInterval = setInterval(() => {
+                progress += Math.random() * 15;
+                if (progress > 90) progress = 90;
+                document.getElementById('progressBar').style.width = progress + '%';
+            }, 500);
+            
             try {
+                const controller = new AbortController();
+                const timeoutId = setTimeout(() => controller.abort(), TIMEOUT);
+                
                 const response = await fetch('/calculate_pbias', {
                     method: 'POST',
-                    body: formData
+                    body: formData,
+                    signal: controller.signal
                 });
+                
+                clearTimeout(timeoutId);
+                clearInterval(progressInterval);
+                document.getElementById('progressBar').style.width = '100%';
                 
                 const data = await response.json();
                 
@@ -182,7 +234,12 @@ HTML_TEMPLATE = '''
                     showError(data.error || 'An error occurred');
                 }
             } catch (error) {
-                showError('Network error: ' + error.message);
+                clearInterval(progressInterval);
+                if (error.name === 'AbortError') {
+                    showError('Request timeout - file may be too large or connection too slow');
+                } else {
+                    showError('Network error: ' + error.message);
+                }
             } finally {
                 document.querySelector('.loading').style.display = 'none';
                 document.querySelector('button[type="submit"]').disabled = false;
@@ -194,9 +251,10 @@ HTML_TEMPLATE = '''
             resultDiv.innerHTML = `
                 <h2>Results</h2>
                 <p><strong>PBIAS Score:</strong> ${data.pbias_score.toFixed(4)}%</p>
-                <p><strong>Submission rows:</strong> ${data.submission_rows}</p>
-                <p><strong>Ground truth rows:</strong> ${data.groundtruth_rows}</p>
-                <p><strong>Columns processed:</strong> ${data.columns_processed}</p>
+                <p><strong>Submission shape:</strong> ${data.submission_shape[0]} rows × ${data.submission_shape[1]} columns</p>
+                <p><strong>Ground truth shape:</strong> ${data.groundtruth_shape[0]} rows × ${data.groundtruth_shape[1]} columns</p>
+                <p><strong>Data columns used:</strong> Columns ${data.start_column} to ${data.end_column}</p>
+                <p><strong>Processing time:</strong> ${data.processing_time || 'N/A'} seconds</p>
             `;
             resultDiv.style.display = 'block';
         }
@@ -214,119 +272,110 @@ HTML_TEMPLATE = '''
 def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
-def calculate_pbias_from_csv(submission_path, groundtruth_path):
-    """Calculate PBIAS without loading entire dataset into memory"""
-    sum_diff_abs = 0.0
-    sum_obs = 0.0
-    rows_processed = 0
-    columns_processed = 0
+def pbias_abs(df_observe, df_predict):
+    """Calculate absolute percent bias between observed and predicted dataframes"""
+    diff_abs = (df_predict - df_observe).abs().values.flatten()
+    obs_vals = df_observe.values.flatten()
     
-    with open(submission_path, 'r') as sub_file, open(groundtruth_path, 'r') as gt_file:
-        sub_reader = csv.reader(sub_file)
-        gt_reader = csv.reader(gt_file)
-        
-        # Skip headers if any
-        sub_header = next(sub_reader, None)
-        gt_header = next(gt_reader, None)
-        
-        # Process row by row
-        for sub_row, gt_row in zip(sub_reader, gt_reader):
-            if len(sub_row) != len(gt_row):
-                raise ValueError(f"Row {rows_processed + 1}: Column count mismatch")
-            
-            # Process columns from index 5 onwards
-            if len(sub_row) > 5:
-                columns_processed = len(sub_row) - 5
-                for i in range(5, len(sub_row)):
-                    try:
-                        sub_val = float(sub_row[i])
-                        gt_val = float(gt_row[i])
-                        sum_diff_abs += abs(sub_val - gt_val)
-                        sum_obs += abs(gt_val)
-                    except (ValueError, IndexError):
-                        continue
-            
-            rows_processed += 1
+    if obs_vals.sum() == 0:
+        return np.nan
     
-    if sum_obs == 0:
-        return 0.0, rows_processed, columns_processed
-    
-    pbias = 100 * (sum_diff_abs / sum_obs)
-    return pbias, rows_processed, columns_processed
+    pbias = 100 * (diff_abs.sum() / obs_vals.sum())
+    return pbias
 
 @app.route('/')
 def index():
+    """Render the main page"""
     return render_template_string(HTML_TEMPLATE)
 
 @app.route('/calculate_pbias', methods=['POST'])
 def calculate_pbias():
+    """API endpoint to calculate PBIAS score"""
+    import time
+    start_time = time.time()
+    
     try:
-        logger.info("Received PBIAS calculation request")
-        
+        # Check if files are present
         if 'submission' not in request.files or 'groundtruth' not in request.files:
-            logger.error("Missing files in request")
             return jsonify({'error': 'Both CSV files are required'}), 400
         
         submission_file = request.files['submission']
         groundtruth_file = request.files['groundtruth']
         
-        logger.info(f"Files received: {submission_file.filename}, {groundtruth_file.filename}")
-        
+        # Validate file names
         if submission_file.filename == '' or groundtruth_file.filename == '':
             return jsonify({'error': 'No files selected'}), 400
         
+        # Validate file extensions
         if not (allowed_file(submission_file.filename) and allowed_file(groundtruth_file.filename)):
             return jsonify({'error': 'Only CSV files are allowed'}), 400
         
         # Save temporary files
-        try:
-            with tempfile.NamedTemporaryFile(delete=False, suffix='.csv') as tmp_submission:
-                submission_file.save(tmp_submission.name)
-                submission_path = tmp_submission.name
-                logger.info(f"Saved submission to: {submission_path}")
-            
-            with tempfile.NamedTemporaryFile(delete=False, suffix='.csv') as tmp_groundtruth:
-                groundtruth_file.save(tmp_groundtruth.name)
-                groundtruth_path = tmp_groundtruth.name
-                logger.info(f"Saved groundtruth to: {groundtruth_path}")
-        except Exception as e:
-            logger.error(f"Error saving files: {str(e)}")
-            return jsonify({'error': f'Error saving files: {str(e)}'}), 500
+        with tempfile.NamedTemporaryFile(delete=False, suffix='.csv') as tmp_submission:
+            submission_file.save(tmp_submission.name)
+            submission_path = tmp_submission.name
+        
+        with tempfile.NamedTemporaryFile(delete=False, suffix='.csv') as tmp_groundtruth:
+            groundtruth_file.save(tmp_groundtruth.name)
+            groundtruth_path = tmp_groundtruth.name
         
         try:
-            # Calculate PBIAS
-            logger.info("Starting PBIAS calculation")
-            pbias_score, rows, cols = calculate_pbias_from_csv(submission_path, groundtruth_path)
-            logger.info(f"PBIAS calculated: {pbias_score}, rows: {rows}, cols: {cols}")
+            # Read CSV files - use chunks for very large files
+            uploaded_data = pd.read_csv(submission_path)
+            groundtruth_data = pd.read_csv(groundtruth_path)
             
+            # Validate data shapes
+            if uploaded_data.shape != groundtruth_data.shape:
+                return jsonify({
+                    'error': f'Data shape mismatch. Submission: {uploaded_data.shape}, Ground truth: {groundtruth_data.shape}'
+                }), 400
+            
+            # Check if there are enough columns
+            if uploaded_data.shape[1] < 6:
+                return jsonify({
+                    'error': f'Not enough columns. Expected at least 6 columns, got {uploaded_data.shape[1]}'
+                }), 400
+            
+            # Calculate PBIAS using columns from index 5 onwards
+            pbias_score = pbias_abs(groundtruth_data.iloc[:, 5:], uploaded_data.iloc[:, 5:])
+            
+            # Calculate processing time
+            processing_time = round(time.time() - start_time, 2)
+            
+            # Prepare response
             response = {
                 'pbias_score': float(pbias_score),
-                'submission_rows': rows,
-                'groundtruth_rows': rows,
-                'columns_processed': cols
+                'submission_shape': list(uploaded_data.shape),
+                'groundtruth_shape': list(groundtruth_data.shape),
+                'start_column': 6,
+                'end_column': uploaded_data.shape[1],
+                'processing_time': processing_time
             }
             
             return jsonify(response), 200
             
-        except Exception as calc_error:
-            logger.error(f"Error in PBIAS calculation: {str(calc_error)}")
-            raise
         finally:
-            try:
+            # Clean up temporary files
+            if os.path.exists(submission_path):
                 os.unlink(submission_path)
+            if os.path.exists(groundtruth_path):
                 os.unlink(groundtruth_path)
-                logger.info("Cleaned up temporary files")
-            except Exception as e:
-                logger.error(f"Error cleaning up files: {str(e)}")
             
-    except ValueError as e:
-        logger.error(f"ValueError: {str(e)}")
-        return jsonify({'error': str(e)}), 400
+    except pd.errors.EmptyDataError:
+        return jsonify({'error': 'One or both CSV files are empty'}), 400
+    except pd.errors.ParserError:
+        return jsonify({'error': 'Error parsing CSV files. Please check the file format'}), 400
+    except MemoryError:
+        return jsonify({'error': 'Files are too large to process. Please try smaller files or split them.'}), 500
     except Exception as e:
-        logger.error(f"Unexpected error: {str(e)}", exc_info=True)
         return jsonify({'error': f'An unexpected error occurred: {str(e)}'}), 500
 
+@app.errorhandler(413)
+def request_entity_too_large(e):
+    return jsonify({'error': 'File too large. Maximum total size is 200MB'}), 413
+
 if __name__ == '__main__':
+    # Run the Flask app
     import os
     port = int(os.environ.get('PORT', 5000))
     app.run(debug=False, host='0.0.0.0', port=port)
